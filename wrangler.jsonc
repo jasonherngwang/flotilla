@@ -5,8 +5,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
-    // 1% log sampling for cost optimization (still captures errors)
-    "logs": { "head_sampling_rate": 0.01 }
+    // Disabled log indexing (wrangler tail still works for debugging)
+    "logs": { "head_sampling_rate": 0 }
   },
   "durable_objects": {
     "bindings": [
