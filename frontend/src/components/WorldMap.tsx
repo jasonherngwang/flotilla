@@ -248,6 +248,74 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
       }
     }
 
+    // ─── Connection lines (both desktop and mobile) ───
+    const nodeIds: NodeId[] = ['A', 'B', 'C', 'D', 'E'];
+    ctx.strokeStyle = '#ffffff18'; // Faint white
+    ctx.lineWidth = 1 * dpr;
+    ctx.setLineDash([3 * dpr, 3 * dpr]); // Dashed line
+
+    for (let i = 0; i < nodeIds.length; i++) {
+      for (let j = i + 1; j < nodeIds.length; j++) {
+        if (mobile) {
+          // Mobile: simple straight lines between circular layout positions
+          const posA = getNodePosition(nodeIds[i], w, h, mobile);
+          const posB = getNodePosition(nodeIds[j], w, h, mobile);
+
+          ctx.beginPath();
+          ctx.moveTo(posA.x, posA.y);
+          ctx.lineTo(posB.x, posB.y);
+          ctx.stroke();
+        } else {
+          // Desktop: curved great circle arcs (with wraparound support)
+          const configA = NODES[nodeIds[i]];
+          const configB = NODES[nodeIds[j]];
+          if (!configA || !configB) continue;
+
+          // Interpolate along great circle arc with wraparound detection
+          const segments = 30;
+          const points: { x: number; y: number }[] = [];
+
+          for (let seg = 0; seg <= segments; seg++) {
+            const t = seg / segments;
+            const pt = interpolateGreatCircle(
+              configA.lat, configA.lng,
+              configB.lat, configB.lng,
+              t
+            );
+            const pos = latLngToCanvas(pt.lat, pt.lng, w, h);
+            points.push(pos);
+          }
+
+          // Draw the path, breaking into segments when it wraps
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+
+          for (let seg = 1; seg < points.length; seg++) {
+            const prevPos = points[seg - 1];
+            const currPos = points[seg];
+
+            // Detect wraparound: large horizontal jump indicates crossing edge
+            const dx = Math.abs(currPos.x - prevPos.x);
+            const isWrap = dx > w / 2; // Jump more than half the screen width
+
+            if (isWrap) {
+              // Finish current segment
+              ctx.stroke();
+              // Start new segment at current point
+              ctx.beginPath();
+              ctx.moveTo(currPos.x, currPos.y);
+            } else {
+              ctx.lineTo(currPos.x, currPos.y);
+            }
+          }
+
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.setLineDash([]); // Reset dash
+
     // ─── Weather effects ───
     const now = performance.now() / 1000;
     weatherFxRef.current = weatherFxRef.current.filter((fx) => {
@@ -311,18 +379,42 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
         pos = latLngToCanvas(pt.lat, pt.lng, w, h);
       }
 
-      // Make normal particles bright and visible, error particles red
+      // Make particles more distinct - moderate size with glow
       const alpha = particle.dropped
-        ? Math.max(0, 1 - particle.progress * 0.5) // Slower fade for errors
-        : Math.max(0, 0.7 - particle.progress * 0.4); // Bright and visible
-      const size = 2 * dpr; // Same size for all particles
+        ? Math.max(0, 1 - particle.progress * 0.3) // Slower fade for errors, stay visible longer
+        : Math.max(0, 0.9 - particle.progress * 0.3); // Much brighter, slower fade
 
-      // Core particle
-      ctx.globalAlpha = particle.dropped ? alpha * 0.95 : alpha * 0.8;
+      const coreSize = particle.dropped ? 2.5 * dpr : 2.5 * dpr; // Moderate size, same for both
+      const glowSize = particle.dropped ? 6 * dpr : 5 * dpr; // Glow halo
+
+      // Outer glow for better visibility
+      const gradient = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, glowSize);
+      gradient.addColorStop(0, particle.color + 'ff'); // Full opacity at center
+      gradient.addColorStop(0.5, particle.color + '66'); // 40% opacity mid
+      gradient.addColorStop(1, particle.color + '00'); // Transparent edge
+
+      ctx.globalAlpha = alpha * 0.6;
       ctx.beginPath();
-      ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
+      ctx.arc(pos.x, pos.y, glowSize, 0, Math.PI * 2);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+
+      // Core particle (bright and solid)
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, coreSize, 0, Math.PI * 2);
       ctx.fillStyle = particle.color;
       ctx.fill();
+
+      // Extra pulse effect for error particles
+      if (particle.dropped) {
+        const pulseAlpha = alpha * 0.4 * (1 + Math.sin(elapsed * 8));
+        ctx.globalAlpha = pulseAlpha;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, coreSize * 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = particle.color;
+        ctx.fill();
+      }
 
       ctx.globalAlpha = 1;
     }

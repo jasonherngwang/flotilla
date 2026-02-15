@@ -63,7 +63,7 @@ export function createParticleFromEvent(event: ClusterEvent): Particle | null {
         progress: 0,
         color: COLORS.droppedParticle,
         startTime: now,
-        duration: 800,
+        duration: 2000, // Same speed as regular heartbeats
         dropped: true,
       };
 
