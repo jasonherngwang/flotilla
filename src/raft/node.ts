@@ -14,6 +14,8 @@ import type {
   NodeMeta,
   ClusterEvent,
 } from '../types';
+import { NODES } from '../types';
+import type { DurableObjectLocationHint } from '@cloudflare/workers-types';
 
 const HEARTBEAT_INTERVAL_MS = 2000;
 const ELECTION_TIMEOUT_MIN_MS = 5000;
@@ -319,11 +321,14 @@ export class RaftNode extends DurableObject<Env> {
     this.faultState.latencyMs = 0;
     this.ctx.storage.sql.exec("DELETE FROM raft_state WHERE key = 'crashed'");
 
-    // Create stubs
+    // Create peer stubs with locationHint
     for (const peerId of peerIds) {
-      this.peerStubs.set(peerId, this.env.RAFT_NODE.getByName(peerId));
+      const config = NODES[peerId];
+      const id = this.env.RAFT_NODE.idFromName(peerId);
+      const stub = this.env.RAFT_NODE.get(id, { locationHint: config.locationHint as DurableObjectLocationHint });
+      this.peerStubs.set(peerId, stub);
     }
-    this.managerStub = this.env.CLUSTER_MANAGER.getByName(managerId);
+    this.managerStub = this.env.CLUSTER_MANAGER.get(this.env.CLUSTER_MANAGER.idFromName(managerId));
 
     // Clear all persistent state for a fresh start each session
     this.ctx.storage.sql.exec('DELETE FROM raft_log');
@@ -528,11 +533,14 @@ export class RaftNode extends DurableObject<Env> {
     this.faultState.latencyMs = 0;
     this.ctx.storage.sql.exec("DELETE FROM raft_state WHERE key = 'crashed'");
 
-    // Restore stubs (DO may have been evicted while crashed)
+    // Restore stubs with locationHint (DO may have been evicted while crashed)
     for (const peerId of peerIds) {
-      this.peerStubs.set(peerId, this.env.RAFT_NODE.getByName(peerId));
+      const config = NODES[peerId];
+      const id = this.env.RAFT_NODE.idFromName(peerId);
+      const stub = this.env.RAFT_NODE.get(id, { locationHint: config.locationHint as DurableObjectLocationHint });
+      this.peerStubs.set(peerId, stub);
     }
-    this.managerStub = this.env.CLUSTER_MANAGER.getByName(managerId);
+    this.managerStub = this.env.CLUSTER_MANAGER.get(this.env.CLUSTER_MANAGER.idFromName(managerId));
 
     // Volatile state resets on recovery (Raft spec),
     // but persistent state (log, currentTerm, votedFor) is preserved.

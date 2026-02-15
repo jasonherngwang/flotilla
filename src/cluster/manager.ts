@@ -7,7 +7,8 @@ import type {
   ClientMessage,
   ServerMessage,
 } from '../types';
-import { NODE_IDS as ALL_NODE_IDS } from '../types';
+import { NODE_IDS as ALL_NODE_IDS, NODES } from '../types';
+import type { DurableObjectLocationHint } from '@cloudflare/workers-types';
 import { ReorderBuffer } from './reorder-buffer';
 
 const FLUSH_INTERVAL_MS = 500;
@@ -237,9 +238,18 @@ export class ClusterManager extends DurableObject<Env> {
   // -- Boot / Shutdown --
 
   private async boot() {
-    // Initialize node stubs
+    // Initialize node stubs with locationHint
     for (const nodeId of ALL_NODE_IDS) {
-      this.nodeStubs.set(nodeId, this.env.RAFT_NODE.getByName(nodeId));
+      const config = NODES[nodeId];
+      const id = this.env.RAFT_NODE.idFromName(nodeId);
+      const stub = this.env.RAFT_NODE.get(id, { locationHint: config.locationHint as DurableObjectLocationHint });
+      this.nodeStubs.set(nodeId, stub);
+      console.log(JSON.stringify({
+        message: 'node_stub_created',
+        nodeId,
+        locationHint: config.locationHint,
+        city: config.city,
+      }));
     }
 
     // Initialize all Raft nodes
