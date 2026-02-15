@@ -5,8 +5,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
-    // 100% log capture — lower to 0.1 or less for high-traffic production use
-    "logs": { "head_sampling_rate": 1 }
+    // 1% log sampling for cost optimization (still captures errors)
+    "logs": { "head_sampling_rate": 0.01 }
   },
   "durable_objects": {
     "bindings": [
