@@ -13,8 +13,19 @@ export function ChaosControls({ nodes, faults, onAction }: ChaosControlsProps) {
   const [writeClicks, setWriteClicks] = useState(0);
   const [healClicks, setHealClicks] = useState(0);
   const [resetClicks, setResetClicks] = useState(0);
+  const [isMobile, setIsMobile] = useState(false);
 
   const hasPartition = faults.some((f) => f.type === 'earthquake');
+
+  // Detect mobile viewport (< 1024px)
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 1024);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Auto-write: submit a write every 3 seconds
   useEffect(() => {
@@ -61,45 +72,59 @@ export function ChaosControls({ nodes, faults, onAction }: ChaosControlsProps) {
     <div
       style={{
         position: 'absolute',
-        top: 20,
-        left: 20,
+        top: isMobile ? 12 : 20,
+        left: isMobile ? 12 : 20,
         display: 'flex',
-        gap: 8,
-        alignItems: 'center',
+        flexDirection: isMobile ? 'column' : 'row',
+        gap: isMobile ? 6 : 8,
+        alignItems: isMobile ? 'flex-start' : 'center',
+        zIndex: 5,
+        maxWidth: isMobile ? 'calc(100vw - 120px)' : 'none',
       }}
     >
-      <ToggleButton
-        label="Auto Write"
-        active={autoWrite}
-        onClick={() => setAutoWrite((v) => !v)}
-        color="#3b82f6"
-      />
-      <ActionButton
-        label="Write"
-        onClick={handleSubmitWrite}
-        clickCount={writeClicks}
-        color="#3b82f6"
-      />
-      <Separator />
-      <ToggleButton
-        label={hasPartition ? 'Partitioned' : 'Split Network'}
-        active={hasPartition}
-        onClick={handlePartition}
-        color="#ec4899"
-      />
-      <Separator />
-      <ActionButton
-        label="Heal All"
-        onClick={handleHealAll}
-        clickCount={healClicks}
-        color="#22c55e"
-      />
-      <ActionButton
-        label="Reset"
-        onClick={handleReset}
-        clickCount={resetClicks}
-        color="#64748b"
-      />
+      <div style={{ display: 'flex', gap: isMobile ? 6 : 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <ToggleButton
+          label="Auto Write"
+          active={autoWrite}
+          onClick={() => setAutoWrite((v) => !v)}
+          color="#3b82f6"
+          compact={isMobile}
+        />
+        <ActionButton
+          label="Write"
+          onClick={handleSubmitWrite}
+          clickCount={writeClicks}
+          color="#3b82f6"
+          compact={isMobile}
+        />
+      </div>
+      {!isMobile && <Separator />}
+      <div style={{ display: 'flex', gap: isMobile ? 6 : 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <ToggleButton
+          label={hasPartition ? 'Partitioned' : 'Split Network'}
+          active={hasPartition}
+          onClick={handlePartition}
+          color="#ec4899"
+          compact={isMobile}
+        />
+      </div>
+      {!isMobile && <Separator />}
+      <div style={{ display: 'flex', gap: isMobile ? 6 : 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <ActionButton
+          label="Heal All"
+          onClick={handleHealAll}
+          clickCount={healClicks}
+          color="#22c55e"
+          compact={isMobile}
+        />
+        <ActionButton
+          label="Reset"
+          onClick={handleReset}
+          clickCount={resetClicks}
+          color="#64748b"
+          compact={isMobile}
+        />
+      </div>
     </div>
   );
 }
@@ -113,11 +138,13 @@ function ActionButton({
   onClick,
   clickCount,
   color,
+  compact = false,
 }: {
   label: string;
   onClick: () => void;
   clickCount: number;
   color: string;
+  compact?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const [animating, setAnimating] = useState(false);
@@ -144,13 +171,13 @@ function ActionButton({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        padding: '6px 12px',
+        padding: compact ? '5px 10px' : '6px 12px',
         background: bg,
         border: `1px solid ${color}`,
         borderRadius: 6,
         color: animating ? '#ffffff' : '#e0e6ed',
         cursor: 'pointer',
-        fontSize: 12,
+        fontSize: compact ? 11 : 12,
         fontWeight: 500,
         transition: 'background 0.08s, color 0.08s',
         whiteSpace: 'nowrap',
@@ -166,11 +193,13 @@ function ToggleButton({
   active,
   onClick,
   color,
+  compact = false,
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
   color: string;
+  compact?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
 
@@ -186,13 +215,13 @@ function ToggleButton({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        padding: '6px 12px',
+        padding: compact ? '5px 10px' : '6px 12px',
         background: bg,
         border: `1px solid ${active ? color : `${color}80`}`,
         borderRadius: 6,
         color: active ? '#ffffff' : '#e0e6ed',
         cursor: 'pointer',
-        fontSize: 12,
+        fontSize: compact ? 11 : 12,
         fontWeight: 500,
         transition: 'background 0.12s, color 0.12s, border-color 0.12s',
         whiteSpace: 'nowrap',

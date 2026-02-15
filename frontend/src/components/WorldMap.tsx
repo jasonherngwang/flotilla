@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import type { NodeId, NodeState, Fault, ClusterEvent, ClientMessage } from '../types';
 import { NODES } from '../types';
 import { useAnimationLoop } from '../hooks/useAnimationLoop';
@@ -52,9 +52,34 @@ interface WorldMapProps {
   drainNewEvents: () => ClusterEvent[];
   mode: 'observe' | 'chaos';
   onAction: (msg: ClientMessage) => void;
+  sidebarOpen: boolean;
 }
 
-export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction }: WorldMapProps) {
+// Helper: get node position (map projection on desktop, circular layout on mobile)
+function getNodePosition(nodeId: NodeId, w: number, h: number, isMobile: boolean): { x: number; y: number } {
+  const config = NODES[nodeId];
+  if (!config) return { x: 0, y: 0 };
+
+  if (isMobile) {
+    // Circular layout for mobile - evenly spaced around a circle
+    const nodeIds: NodeId[] = ['A', 'B', 'C', 'D', 'E'];
+    const index = nodeIds.indexOf(nodeId);
+    const total = nodeIds.length;
+    const angle = (index / total) * Math.PI * 2 - Math.PI / 2; // Start at top
+    const radius = Math.min(w, h) * 0.28; // 28% to keep nodes visible with labels
+    const centerX = w / 2;
+    const centerY = h / 2;
+    return {
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius,
+    };
+  }
+
+  // Desktop: use geographic projection
+  return latLngToCanvas(config.lat, config.lng, w, h);
+}
+
+export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction, sidebarOpen }: WorldMapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const coastlineRef = useRef<CoastlineData | null>(coastlineCache);
@@ -66,6 +91,22 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
   const prevFaultIdsRef = useRef(new Set<string>());
   const prevNodeRolesRef = useRef(new Map<NodeId, string>());
   const prevCrashedRef = useRef(new Set<NodeId>());
+  const BREAKPOINT = 1024;
+  const [isDesktop, setIsDesktop] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth >= BREAKPOINT;
+    }
+    return true;
+  });
+
+  // Detect viewport changes
+  useEffect(() => {
+    const checkViewport = () => {
+      setIsDesktop(window.innerWidth >= BREAKPOINT);
+    };
+    window.addEventListener('resize', checkViewport);
+    return () => window.removeEventListener('resize', checkViewport);
+  }, []);
 
   // Load coastline data on mount
   useEffect(() => {
@@ -144,36 +185,39 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
     const w = canvas.width;
     const h = canvas.height;
     const dpr = devicePixelRatio;
+    const mobile = window.innerWidth < 1024;
 
     // ─── Clear ───
     ctx.fillStyle = COLORS.ocean;
     ctx.fillRect(0, 0, w, h);
 
-    // ─── Coastlines (very faint) ───
-    const coastline = coastlineRef.current;
-    if (coastline) {
-      ctx.fillStyle = COLORS.land;
-      for (const ring of coastline.rings) {
-        if (ring.length < 3) continue;
-        // Skip rings that cross the antimeridian (cause horizontal streaks)
-        let crossesAntimeridian = false;
-        for (let i = 1; i < ring.length; i++) {
-          if (Math.abs(ring[i][0] - ring[i - 1][0]) > 180) {
-            crossesAntimeridian = true;
-            break;
+    // ─── Coastlines (desktop only) ───
+    if (!mobile) {
+      const coastline = coastlineRef.current;
+      if (coastline) {
+        ctx.fillStyle = COLORS.land;
+        for (const ring of coastline.rings) {
+          if (ring.length < 3) continue;
+          // Skip rings that cross the antimeridian (cause horizontal streaks)
+          let crossesAntimeridian = false;
+          for (let i = 1; i < ring.length; i++) {
+            if (Math.abs(ring[i][0] - ring[i - 1][0]) > 180) {
+              crossesAntimeridian = true;
+              break;
+            }
           }
-        }
-        if (crossesAntimeridian) continue;
+          if (crossesAntimeridian) continue;
 
-        ctx.beginPath();
-        const first = latLngToCanvas(ring[0][1], ring[0][0], w, h);
-        ctx.moveTo(first.x, first.y);
-        for (let i = 1; i < ring.length; i++) {
-          const pt = latLngToCanvas(ring[i][1], ring[i][0], w, h);
-          ctx.lineTo(pt.x, pt.y);
+          ctx.beginPath();
+          const first = latLngToCanvas(ring[0][1], ring[0][0], w, h);
+          ctx.moveTo(first.x, first.y);
+          for (let i = 1; i < ring.length; i++) {
+            const pt = latLngToCanvas(ring[i][1], ring[i][0], w, h);
+            ctx.lineTo(pt.x, pt.y);
+          }
+          ctx.closePath();
+          ctx.fill();
         }
-        ctx.closePath();
-        ctx.fill();
       }
     }
 
@@ -186,11 +230,11 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
 
       for (let gi = 0; gi < groups.length; gi++) {
         const color = partitionGroupColors[gi % partitionGroupColors.length];
-        const groupNodes = groups[gi].map((id) => NODES[id]).filter(Boolean);
+        const groupNodeIds = groups[gi];
 
         // Draw a large soft blob at each node — nearby nodes merge naturally
-        for (const nc of groupNodes) {
-          const pos = latLngToCanvas(nc.lat, nc.lng, w, h);
+        for (const nodeId of groupNodeIds) {
+          const pos = getNodePosition(nodeId, w, h, mobile);
           const blobRadius = 80 * dpr;
           const gradient = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, blobRadius);
           gradient.addColorStop(0, `${color}20`);   // ~12% at center
@@ -215,7 +259,7 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
       const age = now - fx.startTime;
 
       if (fx.type === 'lightning') {
-        drawLightning(ctx, w, h, fx.target as NodeId, age, fx.duration, dpr);
+        drawLightning(ctx, w, h, fx.target as NodeId, age, fx.duration, dpr, mobile);
       }
     }
 
@@ -243,16 +287,29 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
       .filter(isParticleAlive);
 
     for (const particle of particlesRef.current) {
-      const fromConfig = NODES[particle.from];
-      const toConfig = NODES[particle.to];
-      if (!fromConfig || !toConfig) continue;
+      const fromPos = getNodePosition(particle.from, w, h, mobile);
+      const toPos = getNodePosition(particle.to, w, h, mobile);
 
-      const pt = interpolateGreatCircle(
-        fromConfig.lat, fromConfig.lng,
-        toConfig.lat, toConfig.lng,
-        particle.progress,
-      );
-      const pos = latLngToCanvas(pt.lat, pt.lng, w, h);
+      // Interpolate position (straight line on mobile, arc on desktop)
+      let pos: { x: number; y: number };
+      if (mobile) {
+        // Simple linear interpolation on mobile
+        pos = {
+          x: fromPos.x + (toPos.x - fromPos.x) * particle.progress,
+          y: fromPos.y + (toPos.y - fromPos.y) * particle.progress,
+        };
+      } else {
+        // Geographic interpolation on desktop
+        const fromConfig = NODES[particle.from];
+        const toConfig = NODES[particle.to];
+        if (!fromConfig || !toConfig) continue;
+        const pt = interpolateGreatCircle(
+          fromConfig.lat, fromConfig.lng,
+          toConfig.lat, toConfig.lng,
+          particle.progress,
+        );
+        pos = latLngToCanvas(pt.lat, pt.lng, w, h);
+      }
 
       // Make normal particles bright and visible, error particles red
       const alpha = particle.dropped
@@ -273,9 +330,7 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
     // ─── Nodes ───
     const maxCommitIndex = Math.max(...nodes.map((n) => n.commitIndex), 0);
     for (const node of nodes) {
-      const config = NODES[node.id];
-      if (!config) continue;
-      const pos = latLngToCanvas(config.lat, config.lng, w, h);
+      const pos = getNodePosition(node.id, w, h, mobile);
 
       const radius = (node.faultState.crashed ? 8 : node.role === 'leader' ? 16 : 11) * dpr;
       const color =
@@ -342,10 +397,13 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
       );
 
       // City name (below node)
-      const citySize = Math.round(11 * dpr);
-      ctx.font = `500 ${citySize}px -apple-system, BlinkMacSystemFont, sans-serif`;
-      ctx.fillStyle = COLORS.textMuted;
-      ctx.fillText(config.city, pos.x, pos.y + radius + 16 * dpr);
+      const config = NODES[node.id];
+      if (config) {
+        const citySize = Math.round(11 * dpr);
+        ctx.font = `500 ${citySize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+        ctx.fillStyle = COLORS.textMuted;
+        ctx.fillText(config.city, pos.x, pos.y + radius + 16 * dpr);
+      }
 
       // Commit index
       const commitSize = Math.round(10 * dpr);
@@ -372,9 +430,7 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
         ctx.globalAlpha = 0.5;
         ctx.fillStyle = color;
         for (const id of groups[gi]) {
-          const nc = NODES[id];
-          if (!nc) continue;
-          const pos = latLngToCanvas(nc.lat, nc.lng, w, h);
+          const pos = getNodePosition(id, w, h, mobile);
           ctx.fillText(`Partition ${gi + 1}`, pos.x, pos.y - 56 * dpr);
         }
         ctx.globalAlpha = 1;
@@ -388,9 +444,7 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
     });
 
     for (const fx of nodeFxRef.current) {
-      const config = NODES[fx.nodeId];
-      if (!config) continue;
-      const pos = latLngToCanvas(config.lat, config.lng, w, h);
+      const pos = getNodePosition(fx.nodeId, w, h, mobile);
       const age = now - fx.startTime;
       const progress = age / fx.duration;
 
@@ -458,11 +512,10 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
     const rect = canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left) * devicePixelRatio;
     const y = (e.clientY - rect.top) * devicePixelRatio;
+    const mobile = window.innerWidth < 1024;
 
     for (const node of nodes) {
-      const config = NODES[node.id];
-      if (!config) continue;
-      const pos = latLngToCanvas(config.lat, config.lng, canvas.width, canvas.height);
+      const pos = getNodePosition(node.id, canvas.width, canvas.height, mobile);
       const dist = Math.sqrt((x - pos.x) ** 2 + (y - pos.y) ** 2);
       if (dist < 30 * devicePixelRatio) {
         if (node.faultState.crashed) {
@@ -475,8 +528,21 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
     }
   }, [mode, nodes, onAction]);
 
+  // Desktop (>=1024px): always adjust width for sidebar (always visible)
+  // Mobile (<1024px): full width, adjust height for bottom drawer when open
+  const containerWidth = isDesktop ? 'calc(100% - 340px)' : '100%';
+  const containerHeight = isDesktop ? '100vh' : (sidebarOpen ? 'calc(100vh - 50vh)' : '100vh');
+
   return (
-    <div ref={containerRef} style={{ width: 'calc(100% - 340px)', height: '100vh', position: 'relative' }}>
+    <div
+      ref={containerRef}
+      style={{
+        width: containerWidth,
+        height: containerHeight,
+        position: 'relative',
+        transition: 'width 0.25s cubic-bezier(0.4, 0, 0.2, 1), height 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+      }}
+    >
       <canvas
         ref={canvasRef}
         onClick={handleClick}
@@ -495,11 +561,9 @@ function drawLightning(
   age: number,
   duration: number,
   dpr: number,
+  mobile: boolean,
 ) {
-  const config = NODES[nodeId];
-  if (!config) return;
-
-  const pos = latLngToCanvas(config.lat, config.lng, w, h);
+  const pos = getNodePosition(nodeId, w, h, mobile);
   const alpha = age < 0.1 ? 1 : Math.max(0, 1 - (age - 0.1) / (duration - 0.1));
 
   // White flash

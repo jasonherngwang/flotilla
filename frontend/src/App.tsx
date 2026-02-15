@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { WorldMap } from './components/WorldMap';
 import { Sidebar } from './components/Sidebar';
 import { ChaosControls } from './components/ChaosControls';
@@ -7,6 +7,7 @@ import type { ClientMessage } from './types';
 
 export function App() {
   const { nodes, faults, events, connected, sendMessage, drainNewEvents, logLines } = useClusterSocket();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const handleAction = useCallback((msg: ClientMessage) => {
     sendMessage(msg);
@@ -21,8 +22,9 @@ export function App() {
         drainNewEvents={drainNewEvents}
         mode="chaos"
         onAction={handleAction}
+        sidebarOpen={sidebarOpen}
       />
-      <Sidebar logLines={logLines} />
+      <Sidebar logLines={logLines} onOpenChange={setSidebarOpen} />
       <ChaosControls
         nodes={nodes}
         faults={faults}
