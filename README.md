@@ -25,11 +25,11 @@ Raft consensus visualization running on geo-distributed Cloudflare Durable Objec
 Each node is a separate Cloudflare DO. We use `locationHint` to try to place each one on a different continent:
 
 ```
-A: { locationHint: 'wnam', city: 'Los Angeles' },
-B: { locationHint: 'enam', city: 'Virginia' },
-C: { locationHint: 'weur', city: 'Frankfurt' },
-D: { locationHint: 'apac', city: 'Tokyo' },
-E: { locationHint: 'oc',   city: 'Sydney' },
+A: { locationHint: 'wnam', city: 'Los Angeles' },   // North America
+B: { locationHint: 'sam',  city: 'São Paulo' },     // South America
+C: { locationHint: 'weur', city: 'Frankfurt' },     // Europe
+D: { locationHint: 'apac', city: 'Tokyo' },         // Asia
+E: { locationHint: 'oc',   city: 'Sydney' },        // Oceania
 ```
 
 Each DO has independent memory, storage, and lifecycle. They talk to each other via direct RPC method calls.
@@ -69,8 +69,8 @@ Browser (React + Canvas)
     ┌────────┬───────┼───────┬────────┐
     ▼        ▼       ▼       ▼        ▼
  Node A   Node B   Node C   Node D   Node E
-  (LA)     (VA)    (FRA)   (Tokyo)  (Sydney)
-  wnam     enam    weur     apac      oc
+  (LA)     (SP)    (FRA)   (Tokyo)  (Sydney)
+  wnam     sam     weur     apac      oc
     │        │       │       │        │
   SQLite   SQLite  SQLite  SQLite   SQLite
 

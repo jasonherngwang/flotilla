@@ -12,7 +12,7 @@ export interface NodeConfig {
 
 export const NODES: Record<NodeId, NodeConfig> = {
   A: { id: 'A', locationHint: 'wnam', city: 'Los Angeles', lat: 34.05, lng: -118.25 },
-  B: { id: 'B', locationHint: 'enam', city: 'Virginia', lat: 38.9, lng: -77.04 },
+  B: { id: 'B', locationHint: 'sam', city: 'São Paulo', lat: -23.55, lng: -46.63 },
   C: { id: 'C', locationHint: 'weur', city: 'Frankfurt', lat: 50.11, lng: 8.68 },
   D: { id: 'D', locationHint: 'apac', city: 'Tokyo', lat: 35.68, lng: 139.69 },
   E: { id: 'E', locationHint: 'oc', city: 'Sydney', lat: -33.87, lng: 151.21 },
