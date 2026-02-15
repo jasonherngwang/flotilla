@@ -8,7 +8,9 @@ Raft consensus visualization running on geo-distributed Cloudflare Durable Objec
 
 **Break things:** Click nodes on the map to crash/heal them. Use toolbar buttons to partition the network. Crash the majority and watch the cluster halt.
 
-**Observe Raft:** Leader crashes trigger elections (candidates are purple). Red particles indicate dropped RPCs. Partitions split the cluster into colored regions — only the majority side can elect a leader. When partitions heal, minority nodes roll back uncommitted entries.
+**Observe Raft:** Leader crashes trigger elections (candidates are purple). Red particles indicate dropped RPCs. Partitions split the cluster into colored regions; only the majority side can elect a leader. When partitions heal, minority nodes roll back uncommitted entries.
+
+![Flotilla screenshot](./frontend/public/flotilla.png)
 
 ## Real vs Simulated
 
@@ -34,7 +36,7 @@ Each DO has independent memory, storage, and lifecycle. They talk to each other 
 
 ### Persistence
 
-Each DO persists Raft state to SQLite. When a crashed node recovers, it reads `currentTerm`, `votedFor`, and the full log from SQLite — same as a server reboot. The cluster starts fresh each session, but crash recovery within a session preserves persistent state.
+Each DO persists Raft state to SQLite. When a crashed node recovers, it reads `currentTerm`, `votedFor`, and the full log from SQLite; same as a server reboot. The cluster starts fresh each session, but crash recovery within a session preserves persistent state.
 
 ### WebSocket Hibernation
 
