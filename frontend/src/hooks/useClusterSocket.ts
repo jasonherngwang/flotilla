@@ -240,6 +240,13 @@ export function useClusterSocket() {
               return prev.filter((f) => f.id !== msg.faultId);
             });
             break;
+
+          case 'user_action': {
+            const ipShort = msg.clientIp.split('.').slice(0, 2).join('.') + '.*.*';
+            const targetText = msg.target ? ` ${msg.target}` : '';
+            addLog(`👤 ${ipShort} → ${msg.action}${targetText}`, '#a78bfa');
+            break;
+          }
         }
       } catch {
         // Malformed message

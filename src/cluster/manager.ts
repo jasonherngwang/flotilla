@@ -11,7 +11,7 @@ import { NODE_IDS as ALL_NODE_IDS } from '../types';
 import { ReorderBuffer } from './reorder-buffer';
 
 const FLUSH_INTERVAL_MS = 500;
-const POLL_EVERY_N_TICKS = 20; // ~10s
+const POLL_EVERY_N_TICKS = 40; // ~20s (reduced for cost optimization)
 const SHUTDOWN_GRACE_MS = 30_000;
 const MAX_CONNECTIONS = 50;
 const GLOBAL_FAULT_RATE_LIMIT = 10; // max fault actions/sec across all connections
@@ -151,6 +151,7 @@ export class ClusterManager extends DurableObject<Env> {
     switch (msg.type) {
       case 'crash_node': {
         console.log(JSON.stringify({ message: 'fault_action', action: 'crash', target: msg.nodeId, clientIp }));
+        this.broadcast({ type: 'user_action', action: 'crash', target: msg.nodeId, clientIp, timestamp: Date.now() });
         const fault: Fault = {
           id: crypto.randomUUID(),
           type: 'thunderstorm',
@@ -163,6 +164,7 @@ export class ClusterManager extends DurableObject<Env> {
       }
       case 'heal_node': {
         console.log(JSON.stringify({ message: 'fault_action', action: 'heal', target: msg.nodeId, clientIp }));
+        this.broadcast({ type: 'user_action', action: 'heal', target: msg.nodeId, clientIp, timestamp: Date.now() });
         const faultsToHeal = this.activeFaults.filter(
           (f) => f.type === 'thunderstorm' && f.target === msg.nodeId,
         );
@@ -173,6 +175,7 @@ export class ClusterManager extends DurableObject<Env> {
       }
       case 'partition': {
         console.log(JSON.stringify({ message: 'fault_action', action: 'partition', groups: msg.groups, clientIp }));
+        this.broadcast({ type: 'user_action', action: 'partition', target: msg.groups.map(g => g.join(',')).join(' | '), clientIp, timestamp: Date.now() });
         const fault: Fault = {
           id: crypto.randomUUID(),
           type: 'earthquake',
@@ -185,6 +188,7 @@ export class ClusterManager extends DurableObject<Env> {
       }
       case 'heal_partition': {
         console.log(JSON.stringify({ message: 'fault_action', action: 'heal_partition', clientIp }));
+        this.broadcast({ type: 'user_action', action: 'heal partition', clientIp, timestamp: Date.now() });
         const partitionFaults = this.activeFaults.filter((f) => f.type === 'earthquake');
         for (const f of partitionFaults) {
           await this.healFault(f.id);
@@ -193,6 +197,7 @@ export class ClusterManager extends DurableObject<Env> {
       }
       case 'heal_all': {
         console.log(JSON.stringify({ message: 'fault_action', action: 'heal_all', clientIp }));
+        this.broadcast({ type: 'user_action', action: 'heal all', clientIp, timestamp: Date.now() });
         const allFaults = [...this.activeFaults];
         for (const f of allFaults) {
           await this.healFault(f.id);
@@ -200,6 +205,7 @@ export class ClusterManager extends DurableObject<Env> {
         break;
       }
       case 'submit_write': {
+        this.broadcast({ type: 'user_action', action: 'submit write', clientIp, timestamp: Date.now() });
         // Send to ALL leaders — in a partition there may be two.
         // The one with majority replication can commit; the isolated
         // one accepts but the entry stays uncommitted (correct Raft).
@@ -217,6 +223,7 @@ export class ClusterManager extends DurableObject<Env> {
         break;
       }
       case 'reset': {
+        this.broadcast({ type: 'user_action', action: 'reset cluster', clientIp, timestamp: Date.now() });
         await this.shutdownCluster();
         this.activeFaults = [];
         this.latestNodeStates.clear();

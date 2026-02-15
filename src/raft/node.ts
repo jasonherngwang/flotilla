@@ -38,6 +38,12 @@ export class RaftNode extends DurableObject<Env> {
   private peerIds: NodeId[] = [];
   private initialized = false;
 
+  // In-memory cache for persistent state (performance optimization)
+  private cachedTerm: number | null = null;
+  private cachedVotedFor: NodeId | null | undefined = undefined;
+  private cachedLastLogIndex: number | null = null;
+  private cachedLastLogTerm: number | null = null;
+
   // DO metadata tracking
   private readonly instantiatedAt = Date.now();
   private rpcCount = 0;
@@ -67,13 +73,16 @@ export class RaftNode extends DurableObject<Env> {
   // checkIfCrashed removed - replaced by isFaulted() which returns boolean instead of throwing
 
   private getCurrentTerm(): number {
+    if (this.cachedTerm !== null) return this.cachedTerm;
     const row = this.ctx.storage.sql
       .exec<{ value: string }>("SELECT value FROM raft_state WHERE key = 'currentTerm'")
       .toArray();
-    return row.length > 0 ? parseInt(row[0].value, 10) : 0;
+    this.cachedTerm = row.length > 0 ? parseInt(row[0].value, 10) : 0;
+    return this.cachedTerm;
   }
 
   private setCurrentTerm(term: number) {
+    this.cachedTerm = term;
     this.ctx.storage.sql.exec(
       "INSERT OR REPLACE INTO raft_state (key, value) VALUES ('currentTerm', ?)",
       String(term),
@@ -81,13 +90,16 @@ export class RaftNode extends DurableObject<Env> {
   }
 
   private getVotedFor(): NodeId | null {
+    if (this.cachedVotedFor !== undefined) return this.cachedVotedFor;
     const row = this.ctx.storage.sql
       .exec<{ value: string }>("SELECT value FROM raft_state WHERE key = 'votedFor'")
       .toArray();
-    return row.length > 0 && row[0].value !== '' ? (row[0].value as NodeId) : null;
+    this.cachedVotedFor = row.length > 0 && row[0].value !== '' ? (row[0].value as NodeId) : null;
+    return this.cachedVotedFor;
   }
 
   private setVotedFor(nodeId: NodeId | null) {
+    this.cachedVotedFor = nodeId;
     this.ctx.storage.sql.exec(
       "INSERT OR REPLACE INTO raft_state (key, value) VALUES ('votedFor', ?)",
       nodeId ?? '',
@@ -95,19 +107,26 @@ export class RaftNode extends DurableObject<Env> {
   }
 
   private getLastLogIndex(): number {
+    if (this.cachedLastLogIndex !== null) return this.cachedLastLogIndex;
     const row = this.ctx.storage.sql
       .exec<{ idx: number }>('SELECT MAX(idx) as idx FROM raft_log')
       .toArray();
-    return row.length > 0 && row[0].idx != null ? row[0].idx : 0;
+    this.cachedLastLogIndex = row.length > 0 && row[0].idx != null ? row[0].idx : 0;
+    return this.cachedLastLogIndex;
   }
 
   private getLastLogTerm(): number {
+    if (this.cachedLastLogTerm !== null) return this.cachedLastLogTerm;
     const lastIdx = this.getLastLogIndex();
-    if (lastIdx === 0) return 0;
+    if (lastIdx === 0) {
+      this.cachedLastLogTerm = 0;
+      return 0;
+    }
     const row = this.ctx.storage.sql
       .exec<{ term: number }>('SELECT term FROM raft_log WHERE idx = ?', lastIdx)
       .toArray();
-    return row.length > 0 ? row[0].term : 0;
+    this.cachedLastLogTerm = row.length > 0 ? row[0].term : 0;
+    return this.cachedLastLogTerm;
   }
 
   private getLogEntry(idx: number): LogEntry | null {
@@ -132,10 +151,16 @@ export class RaftNode extends DurableObject<Env> {
       entry.term,
       JSON.stringify(entry.command),
     );
+    // Invalidate log metadata cache
+    this.cachedLastLogIndex = null;
+    this.cachedLastLogTerm = null;
   }
 
   private deleteLogFrom(fromIdx: number) {
     this.ctx.storage.sql.exec('DELETE FROM raft_log WHERE idx >= ?', fromIdx);
+    // Invalidate log metadata cache
+    this.cachedLastLogIndex = null;
+    this.cachedLastLogTerm = null;
   }
 
   private getLogLength(): number {
@@ -306,6 +331,12 @@ export class RaftNode extends DurableObject<Env> {
     this.commitIndex = 0;
     this.lastApplied = 0;
     this.role = 'follower';
+
+    // Clear caches on init
+    this.cachedTerm = null;
+    this.cachedVotedFor = undefined;
+    this.cachedLastLogIndex = null;
+    this.cachedLastLogTerm = null;
 
     this.initialized = true;
     await this.scheduleElectionTimeout();
@@ -509,6 +540,12 @@ export class RaftNode extends DurableObject<Env> {
     this.commitIndex = 0;
     this.lastApplied = 0;
     this.role = 'follower';
+
+    // Clear caches on recovery to reload from SQLite
+    this.cachedTerm = null;
+    this.cachedVotedFor = undefined;
+    this.cachedLastLogIndex = null;
+    this.cachedLastLogTerm = null;
 
     this.initialized = true;
     await this.scheduleElectionTimeout();

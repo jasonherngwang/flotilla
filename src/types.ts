@@ -121,6 +121,7 @@ export type ServerMessage =
   | { type: 'event'; event: ClusterEvent }
   | { type: 'fault_injected'; fault: Fault }
   | { type: 'fault_healed'; faultId: string }
+  | { type: 'user_action'; action: string; target?: string; clientIp: string; timestamp: number }
   | { type: 'error'; message: string };
 
 export type ClientMessage =
