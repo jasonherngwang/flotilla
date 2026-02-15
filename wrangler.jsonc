@@ -1,0 +1,26 @@
+{
+  "name": "flotilla",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    // 100% log capture — lower to 0.1 or less for high-traffic production use
+    "logs": { "head_sampling_rate": 1 }
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "RAFT_NODE", "class_name": "RaftNode" },
+      { "name": "CLUSTER_MANAGER", "class_name": "ClusterManager" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RaftNode", "ClusterManager"] }
+  ],
+  "assets": {
+    "directory": "./frontend/dist",
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/ws"]
+  }
+}
