@@ -7,7 +7,10 @@ import type { ClientMessage } from './types';
 
 export function App() {
   const { nodes, faults, events, connected, sendMessage, drainNewEvents, logLines } = useClusterSocket();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Start closed on mobile (drawer is hidden by default); open on desktop (sidebar always visible)
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true,
+  );
 
   const handleAction = useCallback((msg: ClientMessage) => {
     sendMessage(msg);

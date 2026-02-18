@@ -45,6 +45,7 @@ export interface AppendEntriesArgs {
 export interface AppendEntriesResult {
   term: number;
   success: boolean;
+  lastLogIndex?: number; // Follower's actual last log index (for fast nextIndex rollback)
 }
 
 export interface LogEntry {

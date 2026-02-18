@@ -68,6 +68,15 @@ export class RaftNode extends DurableObject<Env> {
         command TEXT NOT NULL
       );
     `);
+
+    // Restore crash state from persistent storage so evicted crashed nodes
+    // continue to reject RPCs before ClusterManager calls recover().
+    const crashRow = this.ctx.storage.sql
+      .exec<{ value: string }>("SELECT value FROM raft_state WHERE key = 'crashed'")
+      .toArray();
+    if (crashRow.length > 0 && crashRow[0].value === '1') {
+      this.faultState.crashed = true;
+    }
   }
 
   // -- Persistent state helpers --
@@ -428,7 +437,11 @@ export class RaftNode extends DurableObject<Env> {
       // Log matching: check prevLogIndex/prevLogTerm
       if (args.prevLogIndex > 0) {
         const prevEntry = this.getLogEntry(args.prevLogIndex);
-        if (!prevEntry || prevEntry.term !== args.prevLogTerm) {
+        if (!prevEntry) {
+          // Follower's log is shorter — return actual length so leader can jump nextIndex
+          return { term: updatedTerm, success: false, lastLogIndex: this.getLastLogIndex() };
+        }
+        if (prevEntry.term !== args.prevLogTerm) {
           return { term: updatedTerm, success: false };
         }
       }
@@ -759,8 +772,13 @@ export class RaftNode extends DurableObject<Env> {
                 timestamp: Date.now(),
               });
             } else {
-              // Decrement nextIndex on failure (log mismatch)
-              this.nextIndex.set(peerId, Math.max(1, nextIdx - 1));
+              // Fast nextIndex rollback: if follower reported its actual log length, jump directly
+              if (result.lastLogIndex !== undefined) {
+                this.nextIndex.set(peerId, Math.max(1, result.lastLogIndex + 1));
+              } else {
+                // Fallback: decrement by 1 (term conflict case)
+                this.nextIndex.set(peerId, Math.max(1, nextIdx - 1));
+              }
               this.pushEvent({
                 type: 'heartbeat_ack',
                 from: peerId,

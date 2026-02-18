@@ -4,6 +4,7 @@ import type {
   NodeState,
   ClusterEvent,
   Fault,
+  FaultType,
   ClientMessage,
   ServerMessage,
 } from '../types';
@@ -41,6 +42,38 @@ export class ClusterManager extends DurableObject<Env> {
     `);
   }
 
+  private isClusterInitialized(): boolean {
+    const row = this.ctx.storage.sql
+      .exec<{ value: string }>("SELECT value FROM config WHERE key = 'cluster_initialized'")
+      .toArray();
+    return row.length > 0 && row[0].value === '1';
+  }
+
+  private setClusterInitialized(value: boolean) {
+    if (value) {
+      this.ctx.storage.sql.exec(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('cluster_initialized', '1')",
+      );
+    } else {
+      this.ctx.storage.sql.exec("DELETE FROM config WHERE key = 'cluster_initialized'");
+    }
+  }
+
+  private loadActiveFaultsFromStorage(): Fault[] {
+    return this.ctx.storage.sql
+      .exec<{ id: string; type: string; target: string; source: string; started_at: number }>(
+        'SELECT id, type, target, source, started_at FROM active_faults',
+      )
+      .toArray()
+      .map((r) => ({
+        id: r.id,
+        type: r.type as FaultType,
+        target: r.target,
+        source: r.source as Fault['source'],
+        startedAt: r.started_at,
+      }));
+  }
+
   // -- WebSocket Hub (Hibernation API) --
 
   async fetch(request: Request): Promise<Response> {
@@ -76,6 +109,13 @@ export class ClusterManager extends DurableObject<Env> {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     try {
+      // Re-boot if the DO was evicted while this WebSocket was hibernated.
+      // Existing connections are preserved through hibernation but booted state is lost.
+      if (!this.booted) {
+        this.shutdownGracePeriodEnd = null;
+        await this.boot();
+      }
+
       const msg: ClientMessage = JSON.parse(message as string);
 
       // Rate limit: 2 actions/second per connection
@@ -238,7 +278,7 @@ export class ClusterManager extends DurableObject<Env> {
   // -- Boot / Shutdown --
 
   private async boot() {
-    // Initialize node stubs with locationHint
+    // Always rebuild node stubs (needed after any eviction)
     for (const nodeId of ALL_NODE_IDS) {
       const config = NODES[nodeId];
       const id = this.env.RAFT_NODE.idFromName(nodeId);
@@ -252,36 +292,79 @@ export class ClusterManager extends DurableObject<Env> {
       }));
     }
 
-    // Initialize all Raft nodes
-    const initErrors: NodeId[] = [];
-    for (const nodeId of ALL_NODE_IDS) {
-      const stub = this.nodeStubs.get(nodeId)!;
-      const peers = ALL_NODE_IDS.filter((id) => id !== nodeId);
-      try {
-        await (stub as any).initialize(nodeId, peers, 'singleton');
-      } catch (e) {
-        initErrors.push(nodeId);
-        console.error(JSON.stringify({
-          message: 'node_init_failed',
-          nodeId,
-          error: e instanceof Error ? e.message : String(e),
-        }));
-      }
-    }
-    if (initErrors.length > 0) {
-      this.broadcast({ type: 'error', message: `Failed to init nodes: ${initErrors.join(', ')}` });
-    }
+    const alreadyInitialized = this.isClusterInitialized();
 
-    // Clear any persisted crash states from previous sessions
-    for (const nodeId of ALL_NODE_IDS) {
-      const stub = this.nodeStubs.get(nodeId);
-      if (stub) {
+    if (alreadyInitialized) {
+      // Recovery boot after DO eviction: restore node stubs without wiping Raft state
+      console.log(JSON.stringify({ message: 'cluster_recovery_boot' }));
+
+      // Reload active faults from SQLite (in-memory activeFaults was lost on eviction)
+      this.activeFaults = this.loadActiveFaultsFromStorage();
+
+      // Restore node in-memory state via recover() (preserves SQLite log/term)
+      const recoverErrors: NodeId[] = [];
+      for (const nodeId of ALL_NODE_IDS) {
+        const stub = this.nodeStubs.get(nodeId)!;
+        const peers = ALL_NODE_IDS.filter((id) => id !== nodeId);
         try {
-          await (stub as any).healFault('startup-clear');
+          await (stub as any).recover(nodeId, peers, 'singleton');
         } catch (e) {
-          // Ignore errors - node might already be clear
+          recoverErrors.push(nodeId);
+          console.error(JSON.stringify({
+            message: 'node_recover_failed',
+            nodeId,
+            error: e instanceof Error ? e.message : String(e),
+          }));
         }
       }
+
+      // Re-apply active faults to nodes (in-memory fault state was lost on eviction)
+      for (const fault of this.activeFaults) {
+        await this.reapplyFaultToNodes(fault);
+      }
+
+      if (recoverErrors.length > 0) {
+        this.broadcast({ type: 'error', message: `Failed to recover nodes: ${recoverErrors.join(', ')}` });
+      }
+
+      // Poll nodes immediately so latestNodeStates is populated before the first snapshot is sent.
+      // Without this, clients see zero-state (term 0, commit 0) for up to 20s after DO eviction.
+      await this.pollNodes();
+    } else {
+      // Fresh boot: initialize all Raft nodes (wipes persistent state for clean start)
+      const initErrors: NodeId[] = [];
+      for (const nodeId of ALL_NODE_IDS) {
+        const stub = this.nodeStubs.get(nodeId)!;
+        const peers = ALL_NODE_IDS.filter((id) => id !== nodeId);
+        try {
+          await (stub as any).initialize(nodeId, peers, 'singleton');
+        } catch (e) {
+          initErrors.push(nodeId);
+          console.error(JSON.stringify({
+            message: 'node_init_failed',
+            nodeId,
+            error: e instanceof Error ? e.message : String(e),
+          }));
+        }
+      }
+      if (initErrors.length > 0) {
+        this.broadcast({ type: 'error', message: `Failed to init nodes: ${initErrors.join(', ')}` });
+      }
+
+      // Clear any persisted crash states from previous sessions
+      for (const nodeId of ALL_NODE_IDS) {
+        const stub = this.nodeStubs.get(nodeId);
+        if (stub) {
+          try {
+            await (stub as any).healFault('startup-clear');
+          } catch (e) {
+            // Ignore errors - node might already be clear
+          }
+        }
+      }
+
+      // Mark cluster as initialized so eviction-recovery uses recover() going forward
+      this.setClusterInitialized(true);
     }
 
     this.booted = true;
@@ -289,7 +372,40 @@ export class ClusterManager extends DurableObject<Env> {
     // Start the flush/poll alarm
     await this.ctx.storage.setAlarm(Date.now() + FLUSH_INTERVAL_MS);
 
-    console.log(JSON.stringify({ message: 'cluster_booted' }));
+    console.log(JSON.stringify({ message: 'cluster_booted', recovery: alreadyInitialized }));
+  }
+
+  private async reapplyFaultToNodes(fault: Fault): Promise<void> {
+    if (fault.type === 'thunderstorm') {
+      const stub = this.nodeStubs.get(fault.target as NodeId);
+      if (stub) {
+        await (stub as any).injectFault(fault).catch((err: unknown) => {
+          console.warn(JSON.stringify({ message: 'reapply_fault_failed', target: fault.target, error: String(err) }));
+        });
+        await (stub as any).triggerCrash().catch((err: unknown) => {
+          console.warn(JSON.stringify({ message: 'reapply_crash_failed', target: fault.target, error: String(err) }));
+        });
+      }
+    } else if (fault.type === 'earthquake') {
+      const groups = fault.target.split('|').map((g) => g.split(',') as NodeId[]);
+      for (let i = 0; i < groups.length; i++) {
+        for (let j = 0; j < groups.length; j++) {
+          if (i === j) continue;
+          for (const nodeId of groups[i]) {
+            const partitionedFrom = groups[j].join(',');
+            const stub = this.nodeStubs.get(nodeId);
+            if (stub) {
+              await (stub as any).injectFault({
+                ...fault,
+                target: partitionedFrom,
+              }).catch((err: unknown) => {
+                console.warn(JSON.stringify({ message: 'reapply_partition_failed', nodeId, error: String(err) }));
+              });
+            }
+          }
+        }
+      }
+    }
   }
 
   private async shutdownCluster() {
@@ -303,6 +419,12 @@ export class ClusterManager extends DurableObject<Env> {
 
     this.booted = false;
     await this.ctx.storage.deleteAlarm();
+
+    // Clear the initialized flag so the next boot does a fresh initialize() (wipes node state)
+    // This is important for explicit reset - we want a clean restart, not eviction recovery
+    this.setClusterInitialized(false);
+    // Clear persisted faults so stale faults don't get re-applied on the next eviction-recovery
+    this.ctx.storage.sql.exec('DELETE FROM active_faults');
 
     console.log(JSON.stringify({ message: 'cluster_shutdown' }));
   }
@@ -321,7 +443,18 @@ export class ClusterManager extends DurableObject<Env> {
       return;
     }
 
-    if (!this.booted) return;
+    if (!this.booted) {
+      // DO was evicted while WebSocket connections were hibernated.
+      // Re-boot to restore cluster state so the alarm loop can continue.
+      if (this.ctx.getWebSockets().length > 0) {
+        this.shutdownGracePeriodEnd = null;
+        await this.boot();
+        // boot() scheduled the next alarm; fall through to process this tick
+      } else {
+        // No active connections — alarm fired after eviction with no clients, ignore
+        return;
+      }
+    }
 
     // Flush reorder buffer
     const events = this.reorderBuffer.flush();

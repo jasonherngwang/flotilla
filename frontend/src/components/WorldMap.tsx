@@ -579,20 +579,23 @@ export function WorldMap({ nodes, faults, events, drainNewEvents, mode, onAction
 
   useAnimationLoop(draw);
 
-  // Resize handler
+  // Resize handler — use ResizeObserver so canvas updates on sidebar open/close too
   useEffect(() => {
-    const handleResize = () => {
-      const canvas = canvasRef.current;
-      const container = containerRef.current;
-      if (!canvas || !container) return;
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+
+    const sizeCanvas = () => {
       canvas.width = container.clientWidth * devicePixelRatio;
       canvas.height = container.clientHeight * devicePixelRatio;
       canvas.style.width = `${container.clientWidth}px`;
       canvas.style.height = `${container.clientHeight}px`;
     };
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+
+    sizeCanvas();
+    const observer = new ResizeObserver(sizeCanvas);
+    observer.observe(container);
+    return () => observer.disconnect();
   }, []);
 
   // Click handler
